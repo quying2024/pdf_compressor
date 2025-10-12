@@ -1,0 +1,33 @@
+# requirements.txt
+# 
+# PDF压缩与拆分工具依赖包
+# 
+# 注意：本工具主要依赖外部命令行工具，Python包依赖较少
+# 
+# 核心依赖的外部工具（需要在系统中安装）：
+# - poppler-utils (包含 pdftoppm, pdfinfo)
+# - tesseract-ocr (OCR引擎)
+# - tesseract-ocr-chi-sim (中文语言包)
+# - archive-pdf-tools (包含 recode_pdf)
+# - qpdf (PDF处理工具)
+#
+# Ubuntu/WSL 安装命令：
+# sudo apt update
+# sudo apt install poppler-utils tesseract-ocr tesseract-ocr-chi-sim qpdf pipx
+# pipx install archive-pdf-tools
+# 
+# 或运行安装脚本：
+# chmod +x install_dependencies.sh && ./install_dependencies.sh
+#
+# 注意：推荐使用 pipx 而不是 pip3 来安装 archive-pdf-tools
+# 这样可以避免污染系统Python环境
+
+# 如果需要安装archive-pdf-tools（推荐使用pipx）
+# pipx install archive-pdf-tools>=1.4.1
+
+# 备选方案：如果没有pipx，可以使用pip用户安装
+# pip3 install --user archive-pdf-tools>=1.4.1
+
+# 可选：用于测试和开发
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
