@@ -1,5 +1,48 @@
 # 更新日志 / Changelog
 
+## [v2.0.1] - 2025-10-19
+
+### 🐛 紧急修复 / Critical Bug Fix
+
+#### Bug修复
+- **🔴 Critical**: 修复 `reconstruct_pdf()` 参数名称错误
+  - 错误: 使用了 `images` 和 `hocr` 参数名
+  - 修复: 改为正确的 `image_files` 和 `hocr_file`
+  - 影响: v2.0.0版本完全无法使用，所有压缩操作失败
+  - 错误信息: `TypeError: reconstruct_pdf() got an unexpected keyword argument 'images'`
+
+#### 技术细节
+```python
+# 修复前 (v2.0.0) - 错误
+pipeline.reconstruct_pdf(
+    images=precomputed_data['image_files'],  # ❌
+    hocr=precomputed_data['hocr_file'],      # ❌
+    ...
+)
+
+# 修复后 (v2.0.1) - 正确
+pipeline.reconstruct_pdf(
+    image_files=precomputed_data['image_files'],  # ✅
+    hocr_file=precomputed_data['hocr_file'],      # ✅
+    ...
+)
+```
+
+#### 受影响版本
+- ❌ v2.0.0: 完全无法使用，必须立即更新
+
+#### 提交记录
+- `211141a` - fix: 修复reconstruct_pdf参数名称错误
+
+#### 升级建议
+**所有v2.0.0用户必须立即升级到v2.0.1！**
+
+```bash
+git pull origin main
+```
+
+---
+
 ## [v2.0.0] - 2025-10-18
 
 ### 🎉 重大更新 / Major Updates
