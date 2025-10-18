@@ -60,10 +60,10 @@ python3 test_tool.py
 
 ```bash
 # 基本压缩
-python3 main.py --input document.pdf --output-dir ./output
+python3 main.py --input document.pdf --output ./output
 
 # 允许拆分（推荐）
-python3 main.py --input document.pdf --output-dir ./output --allow-splitting
+python3 main.py --input document.pdf --output ./output --allow-splitting
 
 # 使用快速脚本
 ./run.sh -s document.pdf
@@ -73,7 +73,7 @@ python3 main.py --input document.pdf --output-dir ./output --allow-splitting
 
 ```bash
 # 处理目录中所有PDF
-python3 main.py --input ./pdf_folder --output-dir ./processed --allow-splitting
+python3 main.py --input ./pdf_folder --output ./processed --allow-splitting
 
 # 使用快速脚本
 ./run.sh -s -o ./processed ./pdf_folder
@@ -83,11 +83,11 @@ python3 main.py --input ./pdf_folder --output-dir ./processed --allow-splitting
 
 ```bash
 # 目标8MB，最多拆分6部分
-python3 main.py --input large.pdf --output-dir ./output \
+python3 main.py --input large.pdf --output ./output \
     --target-size 8.0 --max-splits 6 --allow-splitting
 
 # 详细模式
-python3 main.py --input document.pdf --output-dir ./output \
+python3 main.py --input document.pdf --output ./output \
     --verbose --allow-splitting
 
 # 使用快速脚本

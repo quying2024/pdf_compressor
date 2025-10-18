@@ -4,12 +4,13 @@
 
 ## 功能特性
 
-- **智能分层压缩**: 根据文件大小自动选择最优压缩策略
-- **迭代优化算法**: 在质量和文件大小之间寻找最佳平衡点
-- **应急拆分机制**: 当压缩失败时自动拆分文件确保符合大小要求
+- **二分双向搜索压缩**: 采用智能算法快速找到最优质量参数
+- **6方案策略优化**: S1-S6六级压缩方案，自动选择最佳质量
+- **纯物理拆分**: 拆分时不重新压缩，复用压缩中间结果
 - **批量处理**: 支持单文件和目录批量处理
 - **详细日志**: 完整的处理过程记录和错误跟踪
 - **中文支持**: 优化的中文OCR识别
+- **手动模式**: 支持交互式手动输入压缩参数
 
 ## 技术架构
 
@@ -21,9 +22,20 @@
 
 ### 分层压缩策略
 
-- **层级1** (2-10MB): 高质量压缩，优先保证质量
-- **层级2** (10-50MB): 平衡压缩，优先避免拆分
-- **层级3** (≥50MB): 极限压缩，激进参数设置
+项目采用**二分双向搜索算法**，定义了6个压缩方案（S1-S6）：
+
+- **S1** (dpi=300, bg_downsample=2): 高质量起点
+- **S2** (dpi=250, bg_downsample=3): 适度降低
+- **S3** (dpi=200, bg_downsample=4): 平衡质量
+- **S4** (dpi=150, bg_downsample=5): 激进压缩
+- **S5** (dpi=120, bg_downsample=5): 更激进
+- **S6** (dpi=110, bg_downsample=6): 极限压缩
+
+**搜索策略**：
+1. 从S1开始尝试
+2. 若S1失败且结果>1.5倍目标，直接跳至S6
+3. 若S6成功，向上回溯（S5→S4→...）找到最优质量
+4. 否则按S1→S2→S3...顺序渐进搜索
 
 ## 安装要求
 
@@ -87,13 +99,13 @@ pdf_compress.bat C:\Documents\PDFs --allow-splitting --target-size 8.0
 
 ```bash
 # 处理单个文件（允许拆分）
-python main.py --input document.pdf --output-dir ./output --allow-splitting
+python main.py --input document.pdf --output ./output --allow-splitting
 
 # 处理整个目录
-python main.py --input ./pdf_folder --output-dir ./processed
+python main.py --input ./pdf_folder --output ./processed
 
 # 自定义目标大小
-python main.py --input large.pdf --output-dir ./output --target-size 8.0
+python main.py --input large.pdf --output ./output --target-size 8.0
 ```
 
 ### 命令行参数
@@ -101,42 +113,37 @@ python main.py --input large.pdf --output-dir ./output --target-size 8.0
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `--input` | 必需 | - | 输入PDF文件或目录路径 |
-| `--output-dir` | 必需 | - | 输出目录路径 |
+| `--output` | 必需 | - | 输出目录路径 |
 | `--target-size` | 可选 | 2.0 | 目标文件大小(MB) |
 | `--allow-splitting` | 可选 | False | 允许拆分文件 |
 | `--max-splits` | 可选 | 4 | 最大拆分数量(2-10) |
 | `--copy-small-files` | 可选 | False | 复制小文件到输出目录 |
 | `--check-deps` | 可选 | False | 仅检查依赖工具 |
 | `--verbose` | 可选 | False | 显示详细调试信息 |
+| `-k, --keep-temp-on-failure` | 可选 | False | 失败时保留临时目录 |
+| `-?, --examples` | 可选 | False | 显示使用示例 |
+| `-m, --manual` | 可选 | False | 进入手动模式 |
 
 ### 使用示例
 
 ```bash
 # 检查工具依赖
-python -m main --check-deps
+python main.py --check-deps
 
 # 处理单个文件（将 single.pdf 压缩到目标 5MB 并输出到 out/）
-python -m main --input single.pdf --output-dir out --target-size 5
+python main.py --input single.pdf --output out --target-size 5
 
 # 在批量目录上运行，允许拆分并保留临时目录以便调试失败项
-python -m main --input-dir ./pdfs --output-dir ./out --target-size 3 --allow-splitting --max-splits 4 -k
+python main.py --input ./pdfs --output ./out --target-size 3 --allow-splitting --max-splits 4 -k
 
 # 仅检查依赖，不执行压缩（用于诊断）
-python -m main --check-deps
+python main.py --check-deps
 
-# 快速输出常用命令示例（从命令行）
-python -m main -?  # 或 --examples
-```
+# 快速输出常用命令示例
+python main.py -?
 
-### 交互式手动模式（Manual）
-
-```bash
-# 启动交互式全手动模式（在终端中按提示输入参数）
-python -m main --manual
-# 或短选项（在某些 shell 中 -m 可安全使用）：
-python -m main -m
-
-# PowerShell 注意：短选项 `-?` 可能会被解释为帮助符号，建议使用长选项 `--examples`。
+# 进入交互式手动模式
+python main.py --manual
 ```
 
 ## 项目结构
@@ -160,20 +167,33 @@ pdf_compressor/
 
 ## 算法说明
 
-### 迭代压缩算法
+### 二分双向搜索算法
 
-程序采用启发式搜索算法，从高质量参数开始，逐步降低质量直到满足大小要求：
+程序采用智能搜索算法，快速找到最优质量参数：
 
-1. **优先调整背景降采样** (`bg-downsample`): 对文本清晰度影响最小
-2. **其次降低分辨率** (`dpi`): 影响整体质量但能显著减小文件
+1. **渐进式搜索**: 从S1开始，若成功则直接返回
+2. **快速跳跃**: 若S1失败且结果远超目标（>1.5倍），直接跳至S6
+3. **向上回溯**: 若S6成功，向上测试S5、S4...找到最优质量
+4. **顺序尝试**: 若不满足跳跃条件，按S1→S2→S3...顺序尝试
+
+**优势**：
+- 减少不必要的中间尝试
+- 在满足大小要求的前提下最大化质量
+- DAR阶段1-2只执行一次，所有方案复用中间结果
 
 ### 拆分策略
 
-当压缩失败时启动拆分协议：
+当压缩失败时启动**纯物理拆分**协议：
 
-1. **智能分片**: 基于文件大小估算最优拆分数量
-2. **渐进式尝试**: 从估算值开始，逐步增加拆分数直到成功
-3. **质量保证**: 对每个分片使用激进压缩策略
+1. **智能源选择**: 从所有中间结果中选择≤8MB的最大文件作为拆分源
+2. **密度计算**: 基于文件大小估算最优拆分数量
+3. **物理拆分**: 使用qpdf直接拆分，不重新压缩
+4. **页面分配**: 基于密度均衡分配页面到各分片
+
+**优势**：
+- 避免重复压缩，直接使用最佳中间结果
+- 基于密度分配，比简单平均分页更合理
+- 显著提升大文件处理效率
 
 ## 日志和监控
 
@@ -281,6 +301,16 @@ pdf_compressor/
 本项目基于MIT许可证开源。
 
 ## 更新日志
+
+### v2.0.0 (2025-10-18)
+- **重大更新**: 完全重写压缩和拆分算法
+- 新增：二分双向搜索算法（6方案策略）
+- 新增：纯物理拆分策略（复用中间结果）
+- 新增：手动模式支持交互式参数输入
+- 新增：参数示例显示（-?参数）
+- 优化：UTF-8编码支持，解决Windows中文显示问题
+- 优化：参数名称简化（--output-dir → --output）
+- 完善：单元测试覆盖所有算法分支
 
 ### v1.0.0 (2024-10-09)
 - 初始版本发布

@@ -5,233 +5,223 @@ import tempfile
 from pathlib import Path
 from . import utils, pipeline
 
-# 定义不同层级的压缩策略
-STRATEGIES = {
-    1: {  # 2MB <= S < 10MB
-        "name": "高质量压缩",
-        "params_sequence": [
-            {'dpi': 300, 'bg_downsample': 1, 'jpeg2000_encoder': 'openjpeg'},
-            {'dpi': 300, 'bg_downsample': 2, 'jpeg2000_encoder': 'openjpeg'},
-            {'dpi': 300, 'bg_downsample': 3, 'jpeg2000_encoder': 'grok'},
-            {'dpi': 250, 'bg_downsample': 3, 'jpeg2000_encoder': 'openjpeg'},
-            {'dpi': 200, 'bg_downsample': 4, 'jpeg2000_encoder': 'grok'},
-        ]
-    },
-    2: {  # 10MB <= S < 50MB
-        "name": "平衡压缩",
-        "params_sequence": [
-            {'dpi': 300, 'bg_downsample': 2, 'jpeg2000_encoder': 'openjpeg'},
-            {'dpi': 300, 'bg_downsample': 3, 'jpeg2000_encoder': 'grok'},
-            {'dpi': 300, 'bg_downsample': 4, 'jpeg2000_encoder': 'openjpeg'},
-            {'dpi': 250, 'bg_downsample': 4, 'jpeg2000_encoder': 'grok'},
-            {'dpi': 200, 'bg_downsample': 4, 'jpeg2000_encoder': 'openjpeg'},
-            {'dpi': 150, 'bg_downsample': 5, 'jpeg2000_encoder': 'grok'},
-        ]
-    },
-    3: {  # S >= 50MB
-        "name": "极限压缩",
-        "params_sequence": [
-            {'dpi': 200, 'bg_downsample': 3, 'jpeg2000_encoder': 'grok'},
-            {'dpi': 200, 'bg_downsample': 4, 'jpeg2000_encoder': 'grok'},
-            {'dpi': 200, 'bg_downsample': 5, 'jpeg2000_encoder': 'openjpeg'},
-            {'dpi': 150, 'bg_downsample': 5, 'jpeg2000_encoder': 'grok'},
-            {'dpi': 110, 'bg_downsample': 6, 'jpeg2000_encoder': 'grok'},
-        ]
-    }
+# 定义从S1（最保守）到S6（最激进）的6个压缩方案
+# 方案设计考虑了DPI、背景降采样和JPEG2000编码器的组合
+COMPRESSION_SCHEMES = {
+    1: {'name': 'S1-保守', 'dpi': 300, 'bg_downsample': 2, 'jpeg2000_encoder': 'openjpeg'},
+    2: {'name': 'S2-温和', 'dpi': 300, 'bg_downsample': 3, 'jpeg2000_encoder': 'grok'},
+    3: {'name': 'S3-平衡', 'dpi': 250, 'bg_downsample': 3, 'jpeg2000_encoder': 'openjpeg'},
+    4: {'name': 'S4-进取', 'dpi': 200, 'bg_downsample': 4, 'jpeg2000_encoder': 'grok'},
+    5: {'name': 'S5-激进', 'dpi': 150, 'bg_downsample': 5, 'jpeg2000_encoder': 'openjpeg'},
+    6: {'name': 'S6-极限', 'dpi': 110, 'bg_downsample': 6, 'jpeg2000_encoder': 'grok'},
 }
 
-def determine_tier(size_mb):
-    """根据文件大小确定处理层级。"""
-    if 2 <= size_mb < 10:
-        return 1
-    elif 10 <= size_mb < 50:
-        return 2
-    elif size_mb >= 50:
-        return 3
-    return 0  # 小于2MB或无效值
-
-def run_iterative_compression(pdf_path, output_dir, target_size_mb, keep_temp_on_failure=False):
+def _precompute_dar_steps(input_pdf_path, temp_dir):
     """
-    执行迭代压缩流程。
-    返回 (bool, Path): (是否成功, 输出文件路径)
+    执行一次性的解构和分析步骤。
     """
-    original_size_mb = utils.get_file_size_mb(pdf_path)
-    tier = determine_tier(original_size_mb)
-    
-    if tier == 0:
-        logging.warning(f"文件 {pdf_path.name} 大小不符合压缩范围，跳过。")
-        return False, None
-
-    strategy = STRATEGIES[tier]
-    logging.info(f"文件 {pdf_path.name} (大小: {original_size_mb:.2f}MB) 应用策略: 层级 {tier} ({strategy['name']})")
-
-    # 为了避免对每次尝试重复生成 hOCR，我们先选择用于 OCR 的最高 dpi 并仅生成一次 hOCR
-    max_dpi = max(p['dpi'] for p in strategy['params_sequence'])
-    temp_dir_str = utils.create_temp_directory()
-    temp_dir = Path(temp_dir_str)
     try:
-        logging.info(f"生成一次性图像和 hOCR (使用 DPI={max_dpi})，以便在所有尝试中复用")
-        # 生成图像（使用最高 dpi）并运行 OCR 一次
-        image_files = pipeline.deconstruct_pdf_to_images(pdf_path, temp_dir, max_dpi)
+        # 使用S1的DPI进行解构，因为它是最高质量的
+        dpi_for_deconstruct = COMPRESSION_SCHEMES[1]['dpi']
+        logging.info(f"Deconstructing PDF with DPI: {dpi_for_deconstruct}")
+        image_files = pipeline.deconstruct_pdf_to_images(input_pdf_path, temp_dir, dpi=dpi_for_deconstruct)
         if not image_files:
-            logging.error("在生成用于 hOCR 的图像时失败，终止压缩流程。")
-            return False, None
-
+            logging.error("预处理失败：未能从PDF中提取图像。")
+            return None
+        
+        logging.info("Analyzing images to generate hOCR...")
         hocr_file = pipeline.analyze_images_to_hocr(image_files, temp_dir)
         if not hocr_file:
-            logging.error("生成 hOCR 文件失败，终止压缩流程。")
-            return False, None
+            logging.error("预处理失败：未能生成hOCR文件。")
+            return None
+            
+        return {'image_files': image_files, 'hocr_file': hocr_file}
+    except Exception as e:
+        logging.error(f"预处理步骤中发生错误: {e}", exc_info=True)
+        return None
 
-        logging.info(f"将复用 hOCR 文件: {hocr_file}")
-
-        # 首先执行第1次尝试
-        first_params = strategy['params_sequence'][0]
-        encoder = first_params.get('jpeg2000_encoder', 'openjpeg')
-        logging.info(f"--- 首次尝试 (保守): DPI={first_params['dpi']}, BG-Downsample={first_params['bg_downsample']}, JPEG2000={encoder} ---")
-        output_pdf_path = temp_dir / f"output_{pdf_path.stem}_first.pdf"
-        if pipeline.reconstruct_pdf(image_files, hocr_file, temp_dir, first_params, output_pdf_path):
-            result_size_mb = utils.get_file_size_mb(output_pdf_path)
-            logging.info(f"首次尝试结果大小: {result_size_mb:.2f}MB (目标: < {target_size_mb}MB)")
-            if result_size_mb <= target_size_mb:
-                final_path = output_dir / f"{pdf_path.stem}_compressed.pdf"
-                final_path.parent.mkdir(parents=True, exist_ok=True)
-                utils.copy_file(output_pdf_path, final_path)
-                logging.info(f"成功！文件已压缩并保存至: {final_path}")
-                return True, final_path
-
-            # 如果与目标相差较远 (阈值: 1.5x)，直接尝试最激进的参数
-            threshold_factor = 1.5
-            if result_size_mb > target_size_mb * threshold_factor:
-                logging.info("首次结果离目标较远，直接尝试最激进策略")
-                last_index = len(strategy['params_sequence']) - 1
-                last_params = strategy['params_sequence'][last_index]
-                logging.info(f"--- 直接尝试最激进参数: DPI={last_params['dpi']}, BG-Downsample={last_params['bg_downsample']} ---")
-                last_output = temp_dir / f"output_{pdf_path.stem}_last.pdf"
-                if not pipeline.reconstruct_pdf(image_files, hocr_file, temp_dir, last_params, last_output):
-                    logging.error("最激进参数尝试失败，整体压缩失败。")
-                    return False, None
-
-                last_size = utils.get_file_size_mb(last_output)
-                logging.info(f"最激进尝试结果大小: {last_size:.2f}MB (目标: < {target_size_mb}MB)")
-                if last_size > target_size_mb:
-                    logging.error("最激进尝试仍未达到目标，宣告失败。")
-                    return False, None
-
-                # 最激进成功，向上回溯以提高质量
-                logging.info("最激进尝试成功，开始向上回溯尝试更高质量的参数")
-                # 从 last_index-1 向 0 回溯，直到找到第一个不满足目标为止
-                chosen_path = last_output
-                for idx in range(last_index - 1, -1, -1):
-                    params = strategy['params_sequence'][idx]
-                    logging.info(f"--- 回溯尝试 idx={idx}: DPI={params['dpi']}, BG-Downsample={params['bg_downsample']} ---")
-                    test_output = temp_dir / f"output_{pdf_path.stem}_back_{idx}.pdf"
-                    if not pipeline.reconstruct_pdf(image_files, hocr_file, temp_dir, params, test_output):
-                        logging.warning(f"回溯尝试 idx={idx} 重建失败，保留之前的成功结果")
-                        break
-                    test_size = utils.get_file_size_mb(test_output)
-                    logging.info(f"回溯尝试结果大小: {test_size:.2f}MB")
-                    if test_size <= target_size_mb:
-                        chosen_path = test_output
-                    else:
-                        # 当前质量超过目标，停止回溯，使用上一次成功的结果
-                        logging.info("当前回溯尝试超出目标，停止回溯，采用上一次成功结果")
-                        break
-
-                final_path = output_dir / f"{pdf_path.stem}_compressed.pdf"
-                final_path.parent.mkdir(parents=True, exist_ok=True)
-                utils.copy_file(chosen_path, final_path)
-                logging.info(f"成功！最终文件已保存至: {final_path}")
-                return True, final_path
-
-            # 否则按序继续后续配置（从2开始顺序尝试）
-        else:
-            logging.warning("首次尝试重建失败，继续顺序尝试后续参数")
-
-        # 顺序尝试剩下的配置（从第二项开始）
-        for i in range(1, len(strategy['params_sequence'])):
-            params = strategy['params_sequence'][i]
-            encoder = params.get('jpeg2000_encoder', 'openjpeg')
-            logging.info(f"--- 顺序尝试 {i+1}/{len(strategy['params_sequence'])}: DPI={params['dpi']}, BG-Downsample={params['bg_downsample']}, JPEG2000={encoder} ---")
-            output_pdf_path = temp_dir / f"output_{pdf_path.stem}_{i}.pdf"
-            try:
-                if not pipeline.reconstruct_pdf(image_files, hocr_file, temp_dir, params, output_pdf_path):
-                    continue
-                result_size_mb = utils.get_file_size_mb(output_pdf_path)
-                logging.info(f"尝试结果大小: {result_size_mb:.2f}MB (目标: < {target_size_mb}MB)")
-                if result_size_mb <= target_size_mb:
-                    final_path = output_dir / f"{pdf_path.stem}_compressed.pdf"
-                    final_path.parent.mkdir(parents=True, exist_ok=True)
-                    utils.copy_file(output_pdf_path, final_path)
-                    logging.info(f"成功！文件已压缩并保存至: {final_path}")
-                    return True, final_path
-            except Exception as e:
-                logging.error(f"顺序尝试 {i+1} 时发生错误: {e}")
-                continue
-
-        logging.warning(f"所有压缩尝试均失败，无法将 {pdf_path.name} 压缩至目标大小。")
-        return False, None
-
-    finally:
-        # 根据 keep_temp_on_failure 标志决定是否删除临时目录
-        if keep_temp_on_failure:
-            logging.info(f"保留临时目录以便调试: {temp_dir_str}")
-        else:
-            utils.cleanup_directory(temp_dir_str)
-
-def run_aggressive_compression(pdf_path, output_dir, target_size_mb, keep_temp_on_failure=False):
+def run_compression_strategy(input_pdf_path, output_dir, target_size_mb, keep_temp_on_failure=False):
     """
-    运行最激进的压缩策略，用于拆分后的文件片段。
+    运行新的二进制双向搜索压缩策略。
+    返回一个状态元组 (status, details)。
+    status: 'SUCCESS', 'FAILURE', 'SKIPPED', 'ERROR'
+    details: 包含结果信息的字典
     """
-    logging.info(f"对拆分文件片段 {pdf_path.name} 运行激进压缩策略...")
+    original_size_mb = utils.get_file_size_mb(input_pdf_path)
+    logging.info(f"文件 {input_pdf_path.name} (大小: {original_size_mb:.2f}MB) 应用新的压缩策略...")
+
+    if original_size_mb < target_size_mb:
+        logging.warning(f"文件 {input_pdf_path.name} ({original_size_mb:.2f}MB) 已满足要求，跳过压缩。")
+        return 'SKIPPED', {'message': 'File size is already within target.'}
+
+    temp_dir = Path(utils.create_temp_directory())
     
-    # 使用最激进的参数组合
-    aggressive_params = [
-        {'dpi': 150, 'bg_downsample': 4},
-        {'dpi': 150, 'bg_downsample': 5},
-        {'dpi': 120, 'bg_downsample': 3},
-        {'dpi': 100, 'bg_downsample': 2},
-    ]
-    
-    # 对于激进压缩，也先生成一次 hOCR（使用最高 dpi）并在多个激进参数中复用
-    max_dpi = max(p['dpi'] for p in aggressive_params)
-    temp_dir_str = utils.create_temp_directory()
-    temp_dir = Path(temp_dir_str)
     try:
-        logging.info(f"激进压缩：生成一次图像和 hOCR (DPI={max_dpi}) 用于后续多次尝试")
-        image_files = pipeline.deconstruct_pdf_to_images(pdf_path, temp_dir, max_dpi)
-        if not image_files:
-            logging.error("生成用于激进压缩的图像失败。")
-            return False, None
+        # 预计算步骤：只执行一次最耗时的解构和分析
+        logging.info(f"预处理：使用最高DPI ({COMPRESSION_SCHEMES[1]['dpi']}) 生成图像和hOCR文件...")
+        precomputed_data = _precompute_dar_steps(input_pdf_path, temp_dir)
+        if not precomputed_data:
+            return 'ERROR', {'message': 'Preprocessing (DAR) failed.'}
 
-        hocr_file = pipeline.analyze_images_to_hocr(image_files, temp_dir)
-        if not hocr_file:
-            logging.error("生成 hOCR 文件失败（激进压缩）。")
-            return False, None
+        # 运行核心策略逻辑
+        final_result_path, all_results = _run_strategy_logic(
+            input_pdf_path, output_dir, target_size_mb, temp_dir, precomputed_data
+        )
 
-        for i, params in enumerate(aggressive_params):
-            logging.info(f"--- 激进压缩尝试 {i+1}/{len(aggressive_params)}: DPI={params['dpi']}, BG-Downsample={params['bg_downsample']} ---")
-            output_pdf_path = temp_dir / f"compressed_{pdf_path.stem}_{i}.pdf"
-            try:
-                if not pipeline.reconstruct_pdf(image_files, hocr_file, temp_dir, params, output_pdf_path):
-                    continue
-
-                result_size_mb = utils.get_file_size_mb(output_pdf_path)
-                logging.info(f"激进压缩结果大小: {result_size_mb:.2f}MB (目标: < {target_size_mb}MB)")
-
-                if result_size_mb <= target_size_mb:
-                    final_path = output_dir / f"{pdf_path.stem}_compressed.pdf"
-                    final_path.parent.mkdir(parents=True, exist_ok=True)
-                    utils.copy_file(output_pdf_path, final_path)
-                    logging.info(f"激进压缩成功！文件已保存至: {final_path}")
-                    return True, final_path
-            except Exception as e:
-                logging.error(f"激进压缩尝试 {i+1} 时发生错误: {e}")
-                continue
-
-        logging.error(f"激进压缩失败，无法将 {pdf_path.name} 压缩至目标大小。")
-        return False, None
-    finally:
-        if keep_temp_on_failure:
-            logging.info(f"保留激进压缩临时目录以便调试: {temp_dir_str}")
+        if final_result_path:
+            best_scheme_id = final_result_path['scheme_id']
+            final_path = final_result_path['path']
+            return 'SUCCESS', {
+                'best_scheme_id': best_scheme_id,
+                'final_path': final_path,
+                'all_results': all_results
+            }
         else:
-            utils.cleanup_directory(temp_dir_str)
+            return 'FAILURE', {'all_results': all_results}
+
+    except Exception as e:
+        logging.critical(f"压缩策略执行期间发生意外错误: {e}", exc_info=True)
+        return 'ERROR', {'message': str(e), 'all_results': {}}
+    finally:
+        if keep_temp_on_failure and 'final_result_path' not in locals():
+             logging.warning(f"压缩失败，临时目录保留在: {temp_dir}")
+        else:
+            utils.cleanup_directory(temp_dir)
+
+def _run_strategy_logic(input_pdf_path, output_dir, target_size_mb, temp_dir, precomputed_data):
+    """
+    包含核心压缩策略逻辑的内部函数。
+    返回 (final_result_path_dict, all_results) 或 (None, all_results)
+    """
+    all_results = {}
+
+    # 步骤1: 总是先执行最保守的方案S1
+    logging.info("--- 步骤1: 执行最保守方案 S1 ---")
+    s1_result_path = _execute_scheme(1, temp_dir, precomputed_data, input_pdf_path.name)
+    if not s1_result_path:
+        logging.error("关键错误：方案S1执行失败，无法继续。")
+        return None, all_results
+    
+    s1_size_mb = utils.get_file_size_mb(s1_result_path)
+    all_results[1] = {'path': s1_result_path, 'size': s1_size_mb}
+
+    # 检查S1是否已经满足要求
+    if s1_size_mb <= target_size_mb:
+        logging.info(f"太棒了！最保守的方案S1已满足要求 (大小: {s1_size_mb:.2f}MB)。")
+        return _copy_to_output(1, all_results, output_dir, input_pdf_path.name), all_results
+    
+    # 根据S1的结果决定下一步策略
+    try:
+        # 如果S1的结果大于目标大小的1.5倍，则启动“跳跃-回溯”策略
+        if s1_size_mb > target_size_mb * 1.5:
+            logging.info(f"S1结果 ({s1_size_mb:.2f}MB) > 阈值 ({target_size_mb * 1.5:.2f}MB)，启动【跳跃-回溯】策略。")
+            
+            # 步骤2.1: 直接尝试最激进的方案S6
+            logging.info("--- 步骤2.1: 执行最激进方案 S6 ---")
+            s6_result_path = _execute_scheme(6, temp_dir, precomputed_data, input_pdf_path.name)
+            if s6_result_path:
+                s6_size_mb = utils.get_file_size_mb(s6_result_path)
+                all_results[6] = {'path': s6_result_path, 'size': s6_size_mb}
+                
+                if s6_size_mb <= target_size_mb:
+                    # S6成功，开始回溯以寻找更高质量的方案
+                    logging.info("--- 步骤2.2: 回溯搜索更高质量的方案 ---")
+                    best_scheme_id = 6
+                    # 从S5到S2向上回溯
+                    for i in range(5, 1, -1):
+                        result_path = _execute_scheme(i, temp_dir, precomputed_data, input_pdf_path.name)
+                        if result_path:
+                            size_mb = utils.get_file_size_mb(result_path)
+                            all_results[i] = {'path': result_path, 'size': size_mb}
+                            if size_mb <= target_size_mb:
+                                best_scheme_id = i # 更新为当前更优的方案
+                                logging.info(f"方案 {COMPRESSION_SCHEMES[i]['name']} 成功，大小 {size_mb:.2f}MB，继续回溯...")
+                            else:
+                                logging.info(f"方案 {COMPRESSION_SCHEMES[i]['name']} 超出目标，选择前一个方案 {COMPRESSION_SCHEMES[best_scheme_id]['name']} 作为最优解。")
+                                break # 当前方案失败，停止回溯
+                    
+                    logging.info(f"回溯完成，方案 {COMPRESSION_SCHEMES[best_scheme_id]['name']} 是可满足目标的最高质量方案。")
+                    return _copy_to_output(best_scheme_id, all_results, output_dir, input_pdf_path.name), all_results
+
+            # 如果S6失败或未执行，则按顺序尝试S2到S5
+            logging.warning("S6方案未成功或未执行，将按顺序尝试剩余方案...")
+            for i in range(2, 6):
+                if i not in all_results:
+                    result_path = _execute_scheme(i, temp_dir, precomputed_data, input_pdf_path.name)
+                    if result_path:
+                        size_mb = utils.get_file_size_mb(result_path)
+                        all_results[i] = {'path': result_path, 'size': size_mb}
+                        if size_mb <= target_size_mb:
+                            logging.info(f"成功！方案 {COMPRESSION_SCHEMES[i]['name']} 满足要求。")
+                            # 在这种情况下，我们找到了一个可行的方案，但不是通过回溯，所以直接返回
+                            return _copy_to_output(i, all_results, output_dir, input_pdf_path.name), all_results
+            
+            logging.error("所有压缩方案均失败。")
+            return None, all_results
+
+        # 如果S1的结果在目标大小的1.5倍以内，则启动“渐进式”策略
+        else:
+            logging.info(f"S1结果 ({s1_size_mb:.2f}MB) <= 阈值 ({target_size_mb * 1.5:.2f}MB)，启动【渐进式压缩】策略。")
+            # 从S2到S6顺序执行，直到找到第一个满足条件的
+            for i in range(2, 7):
+                result_path = _execute_scheme(i, temp_dir, precomputed_data, input_pdf_path.name)
+                if result_path:
+                    size_mb = utils.get_file_size_mb(result_path)
+                    all_results[i] = {'path': result_path, 'size': size_mb}
+                    if size_mb <= target_size_mb:
+                        logging.info(f"成功！方案 {COMPRESSION_SCHEMES[i]['name']} 满足要求。")
+                        return _copy_to_output(i, all_results, output_dir, input_pdf_path.name), all_results
+            
+            logging.error("所有渐进式压缩方案均失败。")
+            return None, all_results
+    except Exception as e:
+        logging.critical(f"压缩策略逻辑执行期间发生意外错误: {e}", exc_info=True)
+        return None, all_results
+
+def _copy_to_output(scheme_id, all_results, output_dir, original_filename):
+    """将最终选定的PDF复制到输出目录。"""
+    source_path = all_results[scheme_id]['path']
+    output_filename = Path(original_filename).stem + "_compressed.pdf"
+    dest_path = output_dir / output_filename
+    
+    try:
+        utils.copy_file(source_path, dest_path)
+        logging.info(f"文件已复制: {source_path} -> {dest_path}")
+        return {'path': dest_path, 'scheme_id': scheme_id}
+    except Exception as e:
+        logging.error(f"复制最终文件时出错: {e}")
+        return None
+
+def _execute_scheme(scheme_id, temp_dir, precomputed_data, original_filename):
+    """
+    执行单个压缩方案。
+    现在接收 precomputed_data 字典。
+    """
+    scheme = COMPRESSION_SCHEMES[scheme_id]
+    logging.info(f"--- 正在执行方案 {scheme['name']}: DPI={scheme['dpi']}, BG-Downsample={scheme['bg_downsample']}, Encoder={scheme['jpeg2000_encoder']} ---")
+    
+    output_pdf_path = temp_dir / f"output_{Path(original_filename).stem}_S{scheme_id}.pdf"
+    
+    params = {
+        'name': scheme['name'],
+        'dpi': scheme['dpi'],
+        'bg_downsample': scheme['bg_downsample'],
+        'jpeg2000_encoder': scheme['jpeg2000_encoder']
+    }
+
+    try:
+        success = pipeline.reconstruct_pdf(
+            images=precomputed_data['image_files'],
+            hocr=precomputed_data['hocr_file'],
+            temp_dir=temp_dir,
+            params=params,
+            output_pdf_path=output_pdf_path
+        )
+        if success:
+            return output_pdf_path
+        else:
+            logging.error(f"方案 {scheme['name']} 重建PDF失败。")
+            return None
+    except Exception as e:
+        logging.error(f"执行方案 {scheme['name']} 时发生意外错误: {e}", exc_info=True)
+        return None

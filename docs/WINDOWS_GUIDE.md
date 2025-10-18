@@ -1,161 +1,161 @@
-# Windows 用户使用指南
+﻿# Windows ç”¨æˆ·ä½¿ç”¨æŒ‡å—
 
-## WSL环境部署说明
+## WSLçŽ¯å¢ƒéƒ¨ç½²è¯´æ˜Ž
 
-由于此PDF压缩工具依赖的命令行工具（`pdftoppm`, `tesseract`, `recode_pdf`, `qpdf`）主要在Linux环境中可用，Windows用户需要通过WSL（Windows Subsystem for Linux）来使用本工具。
+ç”±äºŽæ­¤PDFåŽ‹ç¼©å·¥å…·ä¾èµ–çš„å‘½ä»¤è¡Œå·¥å…·ï¼ˆ`pdftoppm`, `tesseract`, `recode_pdf`, `qpdf`ï¼‰ä¸»è¦åœ¨LinuxçŽ¯å¢ƒä¸­å¯ç”¨ï¼ŒWindowsç”¨æˆ·éœ€è¦é€šè¿‡WSLï¼ˆWindows Subsystem for Linuxï¼‰æ¥ä½¿ç”¨æœ¬å·¥å…·ã€‚
 
-## 1. 安装WSL
+## 1. å®‰è£…WSL
 
-### 方法一：使用Windows 11/10的内置命令
+### æ–¹æ³•ä¸€ï¼šä½¿ç”¨Windows 11/10çš„å†…ç½®å‘½ä»¤
 ```powershell
-# 在管理员PowerShell中运行
+# åœ¨ç®¡ç†å‘˜PowerShellä¸­è¿è¡Œ
 wsl --install
 
-# 或安装指定的Ubuntu版本
+# æˆ–å®‰è£…æŒ‡å®šçš„Ubuntuç‰ˆæœ¬
 wsl --install -d Ubuntu-24.04
 ```
 
-### 方法二：通过Microsoft Store
-1. 打开Microsoft Store
-2. 搜索"Ubuntu 24.04 LTS"
-3. 点击安装
+### æ–¹æ³•äºŒï¼šé€šè¿‡Microsoft Store
+1. æ‰“å¼€Microsoft Store
+2. æœç´¢"Ubuntu 24.04 LTS"
+3. ç‚¹å‡»å®‰è£…
 
-## 2. 配置WSL
+## 2. é…ç½®WSL
 
-### 启动WSL
+### å¯åŠ¨WSL
 ```powershell
-# 启动默认的Linux发行版
+# å¯åŠ¨é»˜è®¤çš„Linuxå‘è¡Œç‰ˆ
 wsl
 
-# 或启动指定版本
+# æˆ–å¯åŠ¨æŒ‡å®šç‰ˆæœ¬
 wsl -d Ubuntu-24.04
 ```
 
-### 更新系统
+### æ›´æ–°ç³»ç»Ÿ
 ```bash
 sudo apt update && sudo apt upgrade -y
 ```
 
-## 3. 安装项目依赖
+## 3. å®‰è£…é¡¹ç›®ä¾èµ–
 
-### 在WSL中安装Python和pip
+### åœ¨WSLä¸­å®‰è£…Pythonå’Œpip
 ```bash
 sudo apt install python3 python3-pip
 ```
 
-### 复制项目到WSL
+### å¤åˆ¶é¡¹ç›®åˆ°WSL
 ```bash
-# 方法1：直接访问Windows文件系统
+# æ–¹æ³•1ï¼šç›´æŽ¥è®¿é—®Windowsæ–‡ä»¶ç³»ç»Ÿ
 cd /mnt/c/Users/quying/Projects/pdf_compressor
 
-# 方法2：复制到WSL文件系统（推荐）
+# æ–¹æ³•2ï¼šå¤åˆ¶åˆ°WSLæ–‡ä»¶ç³»ç»Ÿï¼ˆæŽ¨èï¼‰
 cp -r /mnt/c/Users/quying/Projects/pdf_compressor ~/pdf_compressor
 cd ~/pdf_compressor
 ```
 
-### 运行安装脚本
+### è¿è¡Œå®‰è£…è„šæœ¬
 ```bash
-# 给脚本执行权限
+# ç»™è„šæœ¬æ‰§è¡Œæƒé™
 chmod +x install_dependencies.sh
 
-# 运行安装脚本
+# è¿è¡Œå®‰è£…è„šæœ¬
 ./install_dependencies.sh
 ```
 
-## 4. 验证安装
+## 4. éªŒè¯å®‰è£…
 
 ```bash
-# 检查依赖
+# æ£€æŸ¥ä¾èµ–
 python3 main.py --check-deps
 
-# 运行测试工具
+# è¿è¡Œæµ‹è¯•å·¥å…·
 python3 test_tool.py
 ```
 
-## 5. 使用示例
+## 5. ä½¿ç”¨ç¤ºä¾‹
 
-### 处理Windows文件系统中的PDF
+### å¤„ç†Windowsæ–‡ä»¶ç³»ç»Ÿä¸­çš„PDF
 ```bash
-# 处理C盘中的PDF文件
-python3 main.py --input /mnt/c/Users/quying/Documents/test.pdf --output-dir ./output --allow-splitting
+# å¤„ç†Cç›˜ä¸­çš„PDFæ–‡ä»¶
+python3 main.py --input /mnt/c/Users/quying/Documents/test.pdf --output ./output --allow-splitting
 
-# 批量处理Windows目录
-python3 main.py --input /mnt/c/Users/quying/Documents/PDFs --output-dir ./processed --allow-splitting
+# æ‰¹é‡å¤„ç†Windowsç›®å½•
+python3 main.py --input /mnt/c/Users/quying/Documents/PDFs --output ./processed --allow-splitting
 ```
 
-### 使用快速脚本
+### ä½¿ç”¨å¿«é€Ÿè„šæœ¬
 ```bash
-# 给快速脚本执行权限
+# ç»™å¿«é€Ÿè„šæœ¬æ‰§è¡Œæƒé™
 chmod +x run.sh
 
-# 使用快速脚本
+# ä½¿ç”¨å¿«é€Ÿè„šæœ¬
 ./run.sh -s /mnt/c/Users/quying/Documents/test.pdf
 ./run.sh -s -o ./processed /mnt/c/Users/quying/Documents/PDFs
 ```
 
-## 6. 文件路径说明
+## 6. æ–‡ä»¶è·¯å¾„è¯´æ˜Ž
 
-### Windows和WSL文件系统对应关系
-- Windows `C:\` → WSL `/mnt/c/`
-- Windows `D:\` → WSL `/mnt/d/`
-- WSL主目录 `~` → Windows `\\wsl$\Ubuntu-24.04\home\username`
+### Windowså’ŒWSLæ–‡ä»¶ç³»ç»Ÿå¯¹åº”å…³ç³»
+- Windows `C:\` â†’ WSL `/mnt/c/`
+- Windows `D:\` â†’ WSL `/mnt/d/`
+- WSLä¸»ç›®å½• `~` â†’ Windows `\\wsl$\Ubuntu-24.04\home\username`
 
-### 示例路径转换
+### ç¤ºä¾‹è·¯å¾„è½¬æ¢
 ```bash
-# Windows路径: C:\Users\quying\Projects\pdf_compressor\test.pdf
-# WSL路径:     /mnt/c/Users/quying/Projects/pdf_compressor/test.pdf
+# Windowsè·¯å¾„: C:\Users\quying\Projects\pdf_compressor\test.pdf
+# WSLè·¯å¾„:     /mnt/c/Users/quying/Projects/pdf_compressor/test.pdf
 
-# Windows路径: D:\Documents\PDFs
-# WSL路径:     /mnt/d/Documents/PDFs
+# Windowsè·¯å¾„: D:\Documents\PDFs
+# WSLè·¯å¾„:     /mnt/d/Documents/PDFs
 ```
 
-## 7. 性能优化建议
+## 7. æ€§èƒ½ä¼˜åŒ–å»ºè®®
 
-### 文件存储位置
+### æ–‡ä»¶å­˜å‚¨ä½ç½®
 ```bash
-# 推荐：将项目复制到WSL文件系统以获得更好性能
+# æŽ¨èï¼šå°†é¡¹ç›®å¤åˆ¶åˆ°WSLæ–‡ä»¶ç³»ç»Ÿä»¥èŽ·å¾—æ›´å¥½æ€§èƒ½
 cp -r /mnt/c/Users/quying/Projects/pdf_compressor ~/pdf_compressor
 
-# 处理大文件时，建议输出也在WSL文件系统
-python3 main.py --input /mnt/c/path/to/large.pdf --output-dir ~/output --allow-splitting
+# å¤„ç†å¤§æ–‡ä»¶æ—¶ï¼Œå»ºè®®è¾“å‡ºä¹Ÿåœ¨WSLæ–‡ä»¶ç³»ç»Ÿ
+python3 main.py --input /mnt/c/path/to/large.pdf --output ~/output --allow-splitting
 ```
 
-### 内存和存储
-- 确保WSL有足够的内存分配（在`.wslconfig`中配置）
-- 为临时文件预留足够的磁盘空间
+### å†…å­˜å’Œå­˜å‚¨
+- ç¡®ä¿WSLæœ‰è¶³å¤Ÿçš„å†…å­˜åˆ†é…ï¼ˆåœ¨`.wslconfig`ä¸­é…ç½®ï¼‰
+- ä¸ºä¸´æ—¶æ–‡ä»¶é¢„ç•™è¶³å¤Ÿçš„ç£ç›˜ç©ºé—´
 
-## 8. 故障排除
+## 8. æ•…éšœæŽ’é™¤
 
-### WSL相关问题
+### WSLç›¸å…³é—®é¢˜
 ```powershell
-# 重启WSL
+# é‡å¯WSL
 wsl --shutdown
 wsl
 
-# 查看WSL状态
+# æŸ¥çœ‹WSLçŠ¶æ€
 wsl --list --verbose
 
-# 设置默认版本
+# è®¾ç½®é»˜è®¤ç‰ˆæœ¬
 wsl --set-default Ubuntu-24.04
 ```
 
-### 权限问题
+### æƒé™é—®é¢˜
 ```bash
-# 确保文件有正确权限
+# ç¡®ä¿æ–‡ä»¶æœ‰æ­£ç¡®æƒé™
 chmod +x *.sh
 chmod +x *.py
 ```
 
-### 路径问题
+### è·¯å¾„é—®é¢˜
 ```bash
-# 使用绝对路径避免路径错误
-python3 main.py --input "$(pwd)/test.pdf" --output-dir "$(pwd)/output"
+# ä½¿ç”¨ç»å¯¹è·¯å¾„é¿å…è·¯å¾„é”™è¯¯
+python3 main.py --input "$(pwd)/test.pdf" --output "$(pwd)/output"
 ```
 
-## 9. WSL配置文件
+## 9. WSLé…ç½®æ–‡ä»¶
 
-### 创建 `.wslconfig` 文件
-在Windows用户目录下创建 `C:\Users\quying\.wslconfig`：
+### åˆ›å»º `.wslconfig` æ–‡ä»¶
+åœ¨Windowsç”¨æˆ·ç›®å½•ä¸‹åˆ›å»º `C:\Users\quying\.wslconfig`ï¼š
 
 ```ini
 [wsl2]
@@ -164,51 +164,51 @@ processors=2
 swap=2GB
 ```
 
-### 应用配置
+### åº”ç”¨é…ç½®
 ```powershell
-# 重启WSL以应用新配置
+# é‡å¯WSLä»¥åº”ç”¨æ–°é…ç½®
 wsl --shutdown
 wsl
 ```
 
-## 10. 完整工作流程示例
+## 10. å®Œæ•´å·¥ä½œæµç¨‹ç¤ºä¾‹
 
 ```bash
-# 1. 进入WSL
+# 1. è¿›å…¥WSL
 wsl
 
-# 2. 切换到项目目录
+# 2. åˆ‡æ¢åˆ°é¡¹ç›®ç›®å½•
 cd ~/pdf_compressor
 
-# 3. 检查依赖（应该全部通过）
+# 3. æ£€æŸ¥ä¾èµ–ï¼ˆåº”è¯¥å…¨éƒ¨é€šè¿‡ï¼‰
 python3 main.py --check-deps
 
-# 4. 处理Windows中的PDF文件
-python3 main.py --input /mnt/c/Users/quying/Documents/申报材料.pdf \
-                --output-dir ~/output \
+# 4. å¤„ç†Windowsä¸­çš„PDFæ–‡ä»¶
+python3 main.py --input /mnt/c/Users/quying/Documents/ç”³æŠ¥ææ–™.pdf \
+                --output ~/output \
                 --allow-splitting \
                 --verbose
 
-# 5. 查看结果
+# 5. æŸ¥çœ‹ç»“æžœ
 ls -la ~/output/
 
-# 6. 复制结果到Windows
-cp ~/output/* /mnt/c/Users/quying/Documents/压缩后/
+# 6. å¤åˆ¶ç»“æžœåˆ°Windows
+cp ~/output/* /mnt/c/Users/quying/Documents/åŽ‹ç¼©åŽ/
 ```
 
-## 11. 自动化脚本
+## 11. è‡ªåŠ¨åŒ–è„šæœ¬
 
-创建一个Windows批处理文件来简化操作：
+åˆ›å»ºä¸€ä¸ªWindowsæ‰¹å¤„ç†æ–‡ä»¶æ¥ç®€åŒ–æ“ä½œï¼š
 
 ```batch
 @echo off
-echo 启动PDF压缩工具...
+echo å¯åŠ¨PDFåŽ‹ç¼©å·¥å…·...
 wsl -d Ubuntu-24.04 -e bash -c "cd ~/pdf_compressor && python3 main.py %*"
 ```
 
-保存为 `pdf_compress.bat`，然后可以在Windows中这样使用：
+ä¿å­˜ä¸º `pdf_compress.bat`ï¼Œç„¶åŽå¯ä»¥åœ¨Windowsä¸­è¿™æ ·ä½¿ç”¨ï¼š
 ```cmd
-pdf_compress.bat --input C:\path\to\file.pdf --output-dir C:\path\to\output --allow-splitting
+pdf_compress.bat --input C:\path\to\file.pdf --output C:\path\to\output --allow-splitting
 ```
 
-这样就可以在Windows环境中无缝使用WSL中的PDF压缩工具了！
+è¿™æ ·å°±å¯ä»¥åœ¨WindowsçŽ¯å¢ƒä¸­æ— ç¼ä½¿ç”¨WSLä¸­çš„PDFåŽ‹ç¼©å·¥å…·äº†ï¼

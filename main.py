@@ -7,6 +7,18 @@ from pathlib import Path
 from compressor import utils
 import orchestrator
 
+# 在程序开始时立即设置 UTF-8 编码，避免 Windows 下的编码问题
+if sys.platform == 'win32':
+    try:
+        # 设置标准输出和标准错误为 UTF-8
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except (AttributeError, OSError):
+        # 如果 reconfigure 不可用（旧版 Python），使用包装器
+        import codecs
+        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+
 def create_argument_parser():
     """创建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
@@ -15,13 +27,13 @@ def create_argument_parser():
         epilog="""
 使用示例:
   # 处理单个文件，允许拆分
-  python main.py --input document.pdf --output-dir ./output --allow-splitting
+  python main.py --input document.pdf --output ./output --allow-splitting
 
   # 处理整个目录，使用默认设置
-  python main.py --input ./pdf_folder --output-dir ./processed
+  python main.py --input ./pdf_folder --output ./processed
 
   # 自定义目标大小为8MB，不允许拆分
-  python main.py --input large.pdf --output-dir ./output --target-size 8.0
+  python main.py --input large.pdf --output ./output --target-size 8.0
 
 注意事项:
   - 确保已安装必要工具: pdftoppm, tesseract, recode_pdf, qpdf
@@ -36,7 +48,9 @@ def create_argument_parser():
     )
     
     parser.add_argument(
-        "--output-dir",
+        "--output",
+        dest="output_dir",  # 内部仍使用 output_dir 变量名以保持代码兼容
+        metavar="DIR",
         help="处理后文件的存放目录。"
     )
     
@@ -109,7 +123,13 @@ def print_banner():
 ║  版本: 1.0.0                                                 ║
 ╚══════════════════════════════════════════════════════════════╝
     """
-    print(banner)
+    try:
+        print(banner)
+    except UnicodeEncodeError:
+        # 如果遇到编码问题，尝试使用 UTF-8 编码
+        import sys
+        sys.stdout.buffer.write(banner.encode('utf-8'))
+        sys.stdout.buffer.write(b'\n')
 
 def main():
     """主函数：解析参数并分发任务。"""
@@ -121,14 +141,17 @@ def main():
     # 如果用户请求显示示例用法，打印几个常用命令并退出
     if getattr(args, 'examples', False):
         examples = [
-            "# 将 single.pdf 压缩到目标 5MB 并输出到 out/（在当前目录）",
-            "python -m main --input single.pdf --output-dir out --target-size 5",
+            "# 将 single.pdf 压缩到目标 5MB 并输出到 out/ 目录",
+            "python main.py --input single.pdf --output out --target-size 5",
             "",
-            "# 在批量目录上运行，允许拆分并保留临时目录以便调试失败项",
-            "python -m main --input-dir ./pdfs --output-dir ./out --target-size 3 --allow-splitting --max-splits 4 -k",
+            "# 处理 ./pdfs 目录中的所有PDF，允许拆分，并在失败时保留临时目录以供调试",
+            "python main.py --input ./pdfs --output ./out --target-size 3 --allow-splitting --max-splits 4 -k",
             "",
             "# 仅检查依赖，不执行压缩（用于诊断）",
-            "python -m main --check-deps",
+            "python main.py --check-deps",
+            "",
+            "# 进入全手动模式，手动输入 DPI、bg-downsample、JPEG2000 编码器等参数",
+            "python main.py --manual",
         ]
         print("示例用法:")
         for line in examples:
@@ -174,7 +197,7 @@ def main():
         sys.exit(1)
     
     if not args.output_dir:
-        logging.error("错误: 必须指定 --output-dir 参数")
+        logging.error("错误: 必须指定 --output 参数")
         parser.print_help()
         sys.exit(1)
     

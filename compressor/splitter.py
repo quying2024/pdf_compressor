@@ -2,13 +2,193 @@
 
 import logging
 import math
-import tempfile
 from pathlib import Path
-from . import utils, strategy, pipeline
+from . import utils, pipeline
 
-def split_pdf(pdf_path, output_path, start_page, end_page):
+def run_splitting_strategy(compression_results, output_dir, args):
     """
-    使用 qpdf 拆分PDF文件。
+    执行新的拆分策略。
+    该策略不进行二次压缩，只对选定的最佳母版进行物理拆分。
+
+    Args:
+        compression_results (dict): 压缩阶段生成的所有中间结果。
+        output_dir (Path): 最终输出目录。
+        args (argparse.Namespace): 命令行参数。
+
+    Returns:
+        bool: 拆分是否成功。
+    """
+    logging.info("=== 启动新版拆分策略 ===")
+    
+    # 1. 选择拆分母版 (Select Splitting Source)
+    source_to_split = _select_splitting_source(compression_results)
+    if not source_to_split:
+        logging.error("拆分失败：在压缩结果中找不到合适的拆分母版。")
+        return False
+
+    source_path = source_to_split['path']
+    source_size_mb = source_to_split['size_mb']
+    logging.info(f"选定拆分母版: {source_path.name}, 大小: {source_size_mb:.2f}MB")
+
+    # 2. 计算页面密度 (Calculate Page Density)
+    total_pages = pipeline.get_pdf_page_count(source_path)
+    if total_pages == 0:
+        logging.error(f"无法获取 {source_path.name} 的页数，拆分中止。")
+        return False
+    
+    page_density = source_size_mb / total_pages
+    logging.info(f"母版总页数: {total_pages}, 平均页面密度: {page_density:.4f} MB/页")
+
+    # 3. 确定最优拆分数量 (Determine Optimal Split Count)
+    target_size_mb = args.target_size
+    try:
+        split_count = _determine_optimal_split_count(source_size_mb, target_size_mb, args.max_splits)
+    except ValueError as e:
+        logging.error(f"拆分失败: {e}")
+        return False
+    
+    logging.info(f"目标拆分数量: {split_count} 部分")
+
+    # 4. 计算各部分页数 (Calculate Pages per Split)
+    try:
+        split_plan = _calculate_split_plan(total_pages, split_count, page_density, target_size_mb)
+    except ValueError as e:
+        logging.error(f"拆分失败: 无法规划页面分配。{e}")
+        return False
+
+    logging.info("生成拆分计划:")
+    for i, part in enumerate(split_plan, 1):
+        logging.info(f"  - 部分 {i}: 页码 {part['start']} - {part['end']} ({part['pages']} 页)")
+
+    # 5. 执行物理拆分 (Execute Physical Split)
+    logging.info("开始执行物理拆分...")
+    original_stem = Path(args.input).stem
+    
+    for i, part_info in enumerate(split_plan, 1):
+        part_path = output_dir / f"{original_stem}_part{i}.pdf"
+        success = _split_pdf_physical(
+            source_path,
+            part_path,
+            part_info['start'],
+            part_info['end']
+        )
+        if not success:
+            logging.error(f"拆分第 {i} 部分时失败。")
+            # 理论上qpdf很稳定，如果失败，通常是IO问题，直接宣告失败
+            return False
+    
+    logging.info("所有部分均已成功拆分！")
+    # 清理压缩阶段留下的临时目录
+    temp_dir_of_compression = source_path.parent
+    if getattr(args, 'keep_temp_on_failure', False) is False:
+        utils.cleanup_directory(temp_dir_of_compression)
+    return True
+
+def _select_splitting_source(all_results):
+    """
+    从所有压缩结果中选择最佳的拆分母版。
+    规则：
+    1. 寻找大小最接近8MB但 <= 8MB 的文件。
+    2. 如果没有，则选择所有结果中最小的那个。
+    """
+    if not all_results:
+        return None
+
+    # 筛选出小于等于8MB的结果
+    under_8mb = [res for res in all_results.values() if res['size_mb'] <= 8.0]
+
+    if under_8mb:
+        # 在小于8MB的结果中，按大小降序排序，取第一个（最接近8MB）
+        best_source = sorted(under_8mb, key=lambda x: x['size_mb'], reverse=True)[0]
+        logging.info(f"找到 {len(under_8mb)} 个小于8MB的候选母版，选择最大的一个。")
+        return best_source
+    else:
+        # 如果没有小于8MB的，就选择所有结果中最小的那个
+        logging.warning("没有找到小于8MB的压缩结果，将选择最小的一个作为拆分母版。")
+        smallest_source = sorted(all_results.values(), key=lambda x: x['size_mb'])[0]
+        return smallest_source
+
+def _determine_optimal_split_count(source_size_mb, target_size_mb, max_splits):
+    """
+    计算最优的拆分数量 k。
+    """
+    if source_size_mb <= target_size_mb:
+        # 这种情况理论上不应该发生，因为如果满足要求，压缩会成功
+        logging.warning("拆分母版大小已满足要求，但仍启动拆分。将默认拆分为2部分。")
+        return 2
+
+    min_k = math.ceil(source_size_mb / target_size_mb)
+    
+    if min_k > max_splits:
+        raise ValueError(f"即使按目标大小 {target_size_mb}MB 拆分，也需要 {min_k} 个部分，超过了最大限制 {max_splits}。")
+
+    return int(min_k) if min_k > 1 else 2
+
+def _calculate_split_plan(total_pages, k, page_density, target_size_mb):
+    """
+    动态计算每个部分的页码范围。
+    """
+    plan = []
+    
+    # 计算单个部分能容纳的最大页数（安全红线）
+    # 留出一点缓冲，例如98%
+    safe_target_size = target_size_mb * 0.98
+    if page_density == 0:
+        # 避免除零错误，虽然不太可能发生
+        raise ValueError("页面密度为0，无法进行拆分规划。")
+    max_pages_per_part = math.floor(safe_target_size / page_density)
+    if max_pages_per_part == 0:
+        raise ValueError(f"页面密度过高 ({page_density:.4f} MB/页)，单页大小已超过目标。")
+
+    logging.debug(f"每个拆分部分的安全页数上限: {max_pages_per_part}")
+
+    start_page = 1
+    remaining_pages = total_pages
+    
+    for i in range(k):
+        remaining_parts = k - i
+        
+        # 计算当前部分应分配的页数
+        if remaining_parts == 1:
+            # 最后一部分，分配所有剩余页数
+            pages_for_this_part = remaining_pages
+        else:
+            # 动态计算平均页数
+            avg_pages = math.ceil(remaining_pages / remaining_parts)
+            # 不能超过安全红线
+            pages_for_this_part = min(avg_pages, max_pages_per_part)
+
+        end_page = start_page + pages_for_this_part - 1
+        
+        # 确保不会超过总页数
+        if end_page > total_pages:
+            end_page = total_pages
+            pages_for_this_part = end_page - start_page + 1
+
+        plan.append({
+            'start': start_page,
+            'end': end_page,
+            'pages': pages_for_this_part
+        })
+
+        start_page = end_page + 1
+        remaining_pages -= pages_for_this_part
+
+        if remaining_pages <= 0 and i < k - 1:
+            # 页数提前分配完了，说明计划有误或页数太少
+            logging.warning(f"页数在第 {i+1} 部分已分配完毕，实际拆分部分将少于计划的 {k} 部分。")
+            break
+    
+    # 最终验证
+    if sum(p['pages'] for p in plan) != total_pages or (plan and plan[-1]['end'] != total_pages):
+        # 这是一个健壮性检查，理论上不应发生
+        raise RuntimeError(f"页面分配计划生成错误：总页数不匹配。计划总页数: {sum(p['pages'] for p in plan)}, 实际总页数: {total_pages}")
+
+    return plan
+
+def _split_pdf_physical(pdf_path, output_path, start_page, end_page):
+    """
+    使用 qpdf 进行纯物理拆分。
     """
     logging.info(f"正在拆分 {pdf_path.name}: 页码 {start_page}-{end_page} -> {output_path.name}")
     command = [
@@ -21,176 +201,3 @@ def split_pdf(pdf_path, output_path, start_page, end_page):
         str(output_path)
     ]
     return utils.run_command(command)
-
-def calculate_split_strategy(total_size_mb, max_splits):
-    """
-    根据文件大小计算最优的拆分策略。
-    返回建议的初始拆分数量。
-    """
-    # 启发式算法：假设一个25MB的块比较有希望被压缩到2MB
-    estimated_chunk_size = 25
-    initial_k = min(max_splits, math.ceil(total_size_mb / estimated_chunk_size))
-    
-    # 最小拆分数为2
-    if initial_k < 2:
-        initial_k = 2
-    
-    logging.info(f"文件大小 {total_size_mb:.2f}MB，建议初始拆分数: {initial_k}")
-    return initial_k
-
-def run_splitting_protocol(pdf_path, output_dir, args):
-    """
-    执行拆分协议。
-    """
-    logging.info(f"为 {pdf_path.name} 启动应急拆分协议...")
-    
-    # 获取PDF页数
-    total_pages = pipeline.get_pdf_page_count(pdf_path)
-    if total_pages == 0:
-        logging.error("无法获取页数，拆分中止。")
-        return False
-
-    logging.info(f"PDF总页数: {total_pages}")
-    
-    # 计算初始拆分策略
-    original_size_mb = utils.get_file_size_mb(pdf_path)
-    initial_k = calculate_split_strategy(original_size_mb, args.max_splits)
-
-    # 尝试不同的拆分数量
-    for k in range(initial_k, args.max_splits + 1):
-        logging.info(f"=== 尝试拆分为 {k} 部分 ===")
-        
-        if not try_split_and_compress(pdf_path, output_dir, args, k, total_pages):
-            logging.warning(f"拆分为 {k} 部分失败，尝试增加拆分数...")
-            continue
-        else:
-            logging.info(f"成功将 {pdf_path.name} 拆分为 {k} 部分并全部压缩成功！")
-            return True
-
-    logging.error(f"拆分协议失败：即使拆分为 {args.max_splits} 部分，也无法完成压缩。")
-    return False
-
-def try_split_and_compress(pdf_path, output_dir, args, k, total_pages):
-    """
-    尝试将PDF拆分为k部分并压缩每一部分。
-    """
-    pages_per_split = math.ceil(total_pages / k)
-    split_files = []
-    temp_split_files = []
-    
-    # 创建临时目录用于存放拆分文件
-    temp_dir_str = utils.create_temp_directory()
-    temp_dir = Path(temp_dir_str)
-    
-    try:
-        # 第一阶段：拆分PDF
-        for i in range(k):
-            start_page = i * pages_per_split + 1
-            end_page = min((i + 1) * pages_per_split, total_pages)
-            
-            if start_page > total_pages:
-                break
-
-            part_path = temp_dir / f"{pdf_path.stem}_temp_part{i+1}.pdf"
-            
-            # 拆分PDF
-            if not split_pdf(pdf_path, part_path, start_page, end_page):
-                logging.error(f"拆分第 {i+1} 部分失败。")
-                return False
-            
-            temp_split_files.append(part_path)
-            logging.info(f"成功拆分第 {i+1} 部分 (页码 {start_page}-{end_page})")
-
-        # 第二阶段：压缩每个拆分文件
-        for i, part_path in enumerate(temp_split_files):
-            logging.info(f"开始压缩第 {i+1} 部分: {part_path.name}")
-            
-            # 对拆分后的文件使用激进压缩策略（传递 keep_temp_on_failure）
-            keep_temp = getattr(args, 'keep_temp_on_failure', False)
-            success, compressed_path = strategy.run_aggressive_compression(
-                part_path, output_dir, args.target_size, keep_temp_on_failure=keep_temp
-            )
-
-            if success:
-                # 重命名为最终文件名
-                final_part_name = f"{pdf_path.stem}_part{i+1}.pdf"
-                final_part_path = output_dir / final_part_name
-                
-                if compressed_path != final_part_path:
-                    utils.copy_file(compressed_path, final_part_path)
-                    # 删除临时压缩文件
-                    if compressed_path.exists():
-                        compressed_path.unlink()
-                
-                split_files.append(final_part_path)
-                logging.info(f"第 {i+1} 部分压缩成功: {final_part_path}")
-            else:
-                logging.error(f"第 {i+1} 部分压缩失败。")
-                # 清理已成功的文件
-                for success_file in split_files:
-                    if success_file.exists():
-                        success_file.unlink()
-                return False
-
-        # 所有部分都成功
-        logging.info(f"所有 {len(split_files)} 个部分都已成功压缩")
-        return True
-        
-    except Exception as e:
-        logging.error(f"拆分和压缩过程中发生错误: {e}")
-        # 清理已创建的文件
-        for success_file in split_files:
-            if success_file.exists():
-                success_file.unlink()
-        return False
-    finally:
-        # 清理临时目录（如果用户要求在失败时保留，则跳过清理）
-        keep_temp = getattr(args, 'keep_temp_on_failure', False)
-        # 如果要求保留且有失败发生，则保留临时目录
-        if keep_temp:
-            logging.info(f"保留拆分临时目录以便调试: {temp_dir_str}")
-        else:
-            utils.cleanup_directory(temp_dir_str)
-
-def estimate_compression_feasibility(pdf_path, target_size_mb):
-    """
-    估算文件是否有可能被压缩到目标大小。
-    这是一个启发式函数，用于优化拆分策略。
-    """
-    current_size_mb = utils.get_file_size_mb(pdf_path)
-    compression_ratio = target_size_mb / current_size_mb
-    
-    # 基于经验的可行性判断
-    if compression_ratio > 0.5:  # 压缩比超过50%
-        return "很可能成功"
-    elif compression_ratio > 0.2:  # 压缩比超过20%
-        return "可能成功"
-    elif compression_ratio > 0.05:  # 压缩比超过5%
-        return "困难但可能"
-    else:
-        return "几乎不可能"
-
-def validate_split_results(split_files, target_size_mb):
-    """
-    验证拆分结果是否符合要求。
-    """
-    all_valid = True
-    total_size = 0
-    
-    for file_path in split_files:
-        if not file_path.exists():
-            logging.error(f"拆分文件不存在: {file_path}")
-            all_valid = False
-            continue
-            
-        size_mb = utils.get_file_size_mb(file_path)
-        total_size += size_mb
-        
-        if size_mb > target_size_mb:
-            logging.error(f"拆分文件 {file_path.name} 大小 {size_mb:.2f}MB 超过目标 {target_size_mb}MB")
-            all_valid = False
-        else:
-            logging.info(f"拆分文件 {file_path.name} 大小 {size_mb:.2f}MB 符合要求")
-    
-    logging.info(f"拆分文件总大小: {total_size:.2f}MB")
-    return all_valid
