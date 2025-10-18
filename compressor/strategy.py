@@ -211,8 +211,8 @@ def _execute_scheme(scheme_id, temp_dir, precomputed_data, original_filename):
 
     try:
         success = pipeline.reconstruct_pdf(
-            images=precomputed_data['image_files'],
-            hocr=precomputed_data['hocr_file'],
+            image_files=precomputed_data['image_files'],
+            hocr_file=precomputed_data['hocr_file'],
             temp_dir=temp_dir,
             params=params,
             output_pdf_path=output_pdf_path
