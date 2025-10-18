@@ -5,15 +5,17 @@ import tempfile
 from pathlib import Path
 from . import utils, pipeline
 
-# 定义从S1（最保守）到S6（最激进）的6个压缩方案
+# 定义从S1（最保守）到S7（最激进）的7个压缩方案
 # 方案设计考虑了DPI、背景降采样和JPEG2000编码器的组合
+# S7 是终极方案，用于探索压缩极限
 COMPRESSION_SCHEMES = {
     1: {'name': 'S1-保守', 'dpi': 300, 'bg_downsample': 2, 'jpeg2000_encoder': 'openjpeg'},
     2: {'name': 'S2-温和', 'dpi': 300, 'bg_downsample': 3, 'jpeg2000_encoder': 'grok'},
     3: {'name': 'S3-平衡', 'dpi': 250, 'bg_downsample': 3, 'jpeg2000_encoder': 'openjpeg'},
     4: {'name': 'S4-进取', 'dpi': 200, 'bg_downsample': 4, 'jpeg2000_encoder': 'grok'},
     5: {'name': 'S5-激进', 'dpi': 150, 'bg_downsample': 5, 'jpeg2000_encoder': 'openjpeg'},
-    6: {'name': 'S6-极限', 'dpi': 110, 'bg_downsample': 6, 'jpeg2000_encoder': 'grok'},
+    6: {'name': 'S6-极限', 'dpi': 100, 'bg_downsample': 8, 'jpeg2000_encoder': 'grok'},
+    7: {'name': 'S7-终极', 'dpi': 72, 'bg_downsample': 10, 'jpeg2000_encoder': 'grok'},
 }
 
 def _precompute_dar_steps(input_pdf_path, temp_dir):
@@ -103,7 +105,7 @@ def _run_strategy_logic(input_pdf_path, output_dir, target_size_mb, temp_dir, pr
         return None, all_results
     
     s1_size_mb = utils.get_file_size_mb(s1_result_path)
-    all_results[1] = {'path': s1_result_path, 'size': s1_size_mb}
+    all_results[1] = {'path': s1_result_path, 'size_mb': s1_size_mb}
 
     # 检查S1是否已经满足要求
     if s1_size_mb <= target_size_mb:
@@ -116,23 +118,34 @@ def _run_strategy_logic(input_pdf_path, output_dir, target_size_mb, temp_dir, pr
         if s1_size_mb > target_size_mb * 1.5:
             logging.info(f"S1结果 ({s1_size_mb:.2f}MB) > 阈值 ({target_size_mb * 1.5:.2f}MB)，启动【跳跃-回溯】策略。")
             
-            # 步骤2.1: 直接尝试最激进的方案S6
-            logging.info("--- 步骤2.1: 执行最激进方案 S6 ---")
-            s6_result_path = _execute_scheme(6, temp_dir, precomputed_data, input_pdf_path.name)
-            if s6_result_path:
-                s6_size_mb = utils.get_file_size_mb(s6_result_path)
-                all_results[6] = {'path': s6_result_path, 'size': s6_size_mb}
+            # 步骤2.1: 直接尝试最激进的方案S7
+            logging.info("--- 步骤2.1: 执行最激进方案 S7 ---")
+            s7_result_path = _execute_scheme(7, temp_dir, precomputed_data, input_pdf_path.name)
+            if s7_result_path:
+                s7_size_mb = utils.get_file_size_mb(s7_result_path)
+                all_results[7] = {'path': s7_result_path, 'size_mb': s7_size_mb}
                 
-                if s6_size_mb <= target_size_mb:
-                    # S6成功，开始回溯以寻找更高质量的方案
+                # 关键检查：如果S7结果大于8MB，说明无法拆分，直接宣告失败
+                if s7_size_mb > 8.0:
+                    logging.error(f"❌ 最激进方案 S7 的结果 ({s7_size_mb:.2f}MB) 仍大于 8MB 拆分阈值，即使拆分也无法满足 2MB 目标，任务失败。")
+                    return None, all_results
+                
+                # 如果S7结果在2MB到8MB之间，切换目标为8MB（为拆分准备）
+                if target_size_mb < 8.0 and s7_size_mb > target_size_mb:
+                    logging.warning(f"⚠️ S7 结果 ({s7_size_mb:.2f}MB) 超过原目标 ({target_size_mb:.2f}MB) 但小于 8MB。")
+                    logging.info("🔄 策略调整：将目标切换为 8MB，寻找最接近 8MB 的方案用于后续拆分。")
+                    target_size_mb = 8.0
+                
+                if s7_size_mb <= target_size_mb:
+                    # S7成功，开始回溯以寻找更高质量的方案
                     logging.info("--- 步骤2.2: 回溯搜索更高质量的方案 ---")
-                    best_scheme_id = 6
-                    # 从S5到S2向上回溯
-                    for i in range(5, 1, -1):
+                    best_scheme_id = 7
+                    # 从S6到S2向上回溯
+                    for i in range(6, 1, -1):
                         result_path = _execute_scheme(i, temp_dir, precomputed_data, input_pdf_path.name)
                         if result_path:
                             size_mb = utils.get_file_size_mb(result_path)
-                            all_results[i] = {'path': result_path, 'size': size_mb}
+                            all_results[i] = {'path': result_path, 'size_mb': size_mb}
                             if size_mb <= target_size_mb:
                                 best_scheme_id = i # 更新为当前更优的方案
                                 logging.info(f"方案 {COMPRESSION_SCHEMES[i]['name']} 成功，大小 {size_mb:.2f}MB，继续回溯...")
@@ -143,14 +156,14 @@ def _run_strategy_logic(input_pdf_path, output_dir, target_size_mb, temp_dir, pr
                     logging.info(f"回溯完成，方案 {COMPRESSION_SCHEMES[best_scheme_id]['name']} 是可满足目标的最高质量方案。")
                     return _copy_to_output(best_scheme_id, all_results, output_dir, input_pdf_path.name), all_results
 
-            # 如果S6失败或未执行，则按顺序尝试S2到S5
-            logging.warning("S6方案未成功或未执行，将按顺序尝试剩余方案...")
-            for i in range(2, 6):
+            # 如果S7失败或未执行，则按顺序尝试S2到S6
+            logging.warning("S7方案未成功或未执行，将按顺序尝试剩余方案...")
+            for i in range(2, 7):
                 if i not in all_results:
                     result_path = _execute_scheme(i, temp_dir, precomputed_data, input_pdf_path.name)
                     if result_path:
                         size_mb = utils.get_file_size_mb(result_path)
-                        all_results[i] = {'path': result_path, 'size': size_mb}
+                        all_results[i] = {'path': result_path, 'size_mb': size_mb}
                         if size_mb <= target_size_mb:
                             logging.info(f"成功！方案 {COMPRESSION_SCHEMES[i]['name']} 满足要求。")
                             # 在这种情况下，我们找到了一个可行的方案，但不是通过回溯，所以直接返回
@@ -162,12 +175,12 @@ def _run_strategy_logic(input_pdf_path, output_dir, target_size_mb, temp_dir, pr
         # 如果S1的结果在目标大小的1.5倍以内，则启动“渐进式”策略
         else:
             logging.info(f"S1结果 ({s1_size_mb:.2f}MB) <= 阈值 ({target_size_mb * 1.5:.2f}MB)，启动【渐进式压缩】策略。")
-            # 从S2到S6顺序执行，直到找到第一个满足条件的
-            for i in range(2, 7):
+            # 从S2到S7顺序执行，直到找到第一个满足条件的
+            for i in range(2, 8):
                 result_path = _execute_scheme(i, temp_dir, precomputed_data, input_pdf_path.name)
                 if result_path:
                     size_mb = utils.get_file_size_mb(result_path)
-                    all_results[i] = {'path': result_path, 'size': size_mb}
+                    all_results[i] = {'path': result_path, 'size_mb': size_mb}
                     if size_mb <= target_size_mb:
                         logging.info(f"成功！方案 {COMPRESSION_SCHEMES[i]['name']} 满足要求。")
                         return _copy_to_output(i, all_results, output_dir, input_pdf_path.name), all_results

@@ -1,5 +1,76 @@
 # 更新日志 / Changelog
 
+## [v2.0.2] - 2025-10-19
+
+### 🔧 关键修复和策略优化 / Critical Fixes & Strategy Optimization
+
+#### 🐛 紧急修复 / Critical Bug Fixes
+
+1. **KeyError: 'size_mb'** (Critical)
+   - **现象**: 拆分策略启动时崩溃
+   - **原因**: `strategy.py` 使用 `'size'` 字段，但 `splitter.py` 期望 `'size_mb'`
+   - **修复**: 统一所有 `all_results` 字典使用 `'size_mb'` 字段
+   - **影响**: 所有需要拆分的场景在 v2.0.1 中全部崩溃
+   - **修改位置**: `compressor/strategy.py` 5 处修改
+
+#### ⚡ 策略优化 / Strategy Optimizations
+
+2. **智能失败快速判定**
+   - **问题**: S6 结果 > 8MB 时仍继续尝试 S2-S5，实测浪费 1 小时+
+   - **优化**: S7 > 8MB 时立即失败，避免无意义尝试
+   - **效果**: 大幅减少处理时间
+
+3. **智能目标切换机制**
+   - **新增**: 当 2MB < S7 ≤ 8MB 时，自动将目标从 2MB 切换为 8MB
+   - **目的**: 为后续拆分准备最优母版（最接近 8MB）
+   - **逻辑**: 从 S7 向 S1 回溯，找到 ≤ 8MB 的最大方案
+
+4. **拆分前置条件检查**
+   - **新增**: 在启动拆分前检查是否存在 < 8MB 的压缩结果
+   - **效果**: 避免进入注定失败的拆分流程
+   - **修改位置**: `compressor/splitter.py` 新增 12 行
+
+#### 🚀 性能增强 / Performance Enhancements
+
+5. **压缩方案增强**
+   - **S6 增强**: DPI 110→100, BG-Downsample 6→8
+   - **S7 新增**: DPI=72, BG-Downsample=10, Encoder=grok
+   - **目的**: 探索压缩极限，能够处理更大的 PDF 文件
+
+#### 📋 完整变更列表 / Full Changes
+
+**修改文件**:
+- `compressor/strategy.py` - 23 行修改
+  - 5 处字段名称统一
+  - 3 处智能判断逻辑
+  - S6 方案增强，新增 S7 方案
+  - 调整循环范围 (2-6 → 2-7)
+- `compressor/splitter.py` - 12 行新增
+  - 前置条件检查逻辑
+
+**测试建议**:
+```bash
+# 重新测试原失败案例
+python main.py -i testpdf156.pdf -o output -t 2 --allow-splitting
+```
+
+**预期改进**:
+- ✅ 修复拆分策略崩溃
+- ✅ 大幅减少无效压缩尝试时间
+- ✅ 智能选择最优拆分母版
+- ✅ 提升极限压缩能力
+
+#### 🔍 待研究问题 / Future Research
+
+用户提出的重要问题：
+1. 不同 DPI 的 hOCR 对各压缩方案的影响
+2. 空 hOCR 文件在极限压缩下的效果
+3. 为低 DPI 方案生成对应 DPI 的 hOCR
+
+详见: `docs/v2.0.2_关键修复和策略优化.md`
+
+---
+
 ## [v2.0.1] - 2025-10-19
 
 ### 🐛 紧急修复 / Critical Bug Fix

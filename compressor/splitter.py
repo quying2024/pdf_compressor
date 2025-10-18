@@ -20,6 +20,19 @@ def run_splitting_strategy(compression_results, output_dir, args):
     """
     logging.info("=== 启动新版拆分策略 ===")
     
+    # 前置检查：确保存在小于8MB的压缩结果
+    all_results = compression_results.get('all_results', {})
+    if not all_results:
+        logging.error("❌ 拆分失败：没有任何压缩结果可用于拆分。")
+        return False
+    
+    under_8mb = [res for res in all_results.values() if res.get('size_mb', float('inf')) <= 8.0]
+    if not under_8mb:
+        logging.error("❌ 拆分失败：所有压缩结果均大于 8MB，无法进行有效拆分。")
+        return False
+    
+    logging.info(f"✓ 找到 {len(under_8mb)} 个小于 8MB 的压缩结果，可以进行拆分。")
+    
     # 1. 选择拆分母版 (Select Splitting Source)
     source_to_split = _select_splitting_source(compression_results)
     if not source_to_split:
