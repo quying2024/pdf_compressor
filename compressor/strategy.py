@@ -221,11 +221,21 @@ def _execute_scheme(scheme_id, temp_dir, precomputed_data, original_filename):
         'bg_downsample': scheme['bg_downsample'],
         'jpeg2000_encoder': scheme['jpeg2000_encoder']
     }
+    
+    # S7 方案：应用 hOCR 极限优化（移除文字标签以换取更小体积）
+    hocr_file_to_use = precomputed_data['hocr_file']
+    if scheme_id == 7:
+        logging.info("🔥 S7 极限压缩：应用 hOCR 优化（将失去文本搜索功能但可减小约 7% 体积）")
+        # 创建副本以避免影响其他方案
+        import shutil
+        s7_hocr_file = temp_dir / "output_s7_optimized.hocr"
+        shutil.copy2(precomputed_data['hocr_file'], s7_hocr_file)
+        hocr_file_to_use = pipeline.optimize_hocr_for_extreme_compression(s7_hocr_file)
 
     try:
         success = pipeline.reconstruct_pdf(
             image_files=precomputed_data['image_files'],
-            hocr_file=precomputed_data['hocr_file'],
+            hocr_file=hocr_file_to_use,
             temp_dir=temp_dir,
             params=params,
             output_pdf_path=output_pdf_path
